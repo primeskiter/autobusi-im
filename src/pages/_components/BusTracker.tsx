@@ -21,6 +21,7 @@ import { motion } from "motion/react";
 import FavoritesPanel from "./FavoritesPanel.tsx";
 import NearbyStopsPanel from "./NearbyStopsPanel.tsx";
 import RouteCarousel from "./RouteCarousel.tsx";
+import GlobalSearchBar from "./GlobalSearchBar.tsx";
 import RouteDetailPanel from "./RouteDetailPanel.tsx";
 import RoutePolyline from "./RoutePolyline.tsx";
 import SearchBar from "./SearchBar.tsx";
@@ -113,13 +114,32 @@ export default function BusTracker() {
     mapRef.current = map;
   }, []);
 
-  const handleSelectRoute = useCallback((route: BusRoute) => {
+  // The sidebar's width change is a CSS transition, so Leaflet doesn't
+  // automatically know its container resized. Without this, the map keeps
+  // rendering at its old (narrower) size and leaves a blank gap once the
+  // sidebar collapses. 300ms matches the sidebar's transition-duration.
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      mapRef.current?.invalidateSize({ animate: true });
+    }, 320);
+    return () => clearTimeout(timeout);
+  }, [sidebarOpen]);
+
+  const handleSelectRoute = useCallback((route: BusRoute, originStop?: BusStop | null) => {
     setSelectedRoute(route);
-    setSelectedStop(null);
     setPanelMode("route");
-    if (mapRef.current && route.stops.length > 0) {
-      const bounds = L.latLngBounds(route.stops.map((s) => [s.lat, s.lng]));
-      mapRef.current.fitBounds(bounds, { padding: [60, 60] });
+    if (originStop) {
+      // Came from a stop's context (e.g. "here's the 1A, arriving in 5 min")
+      // — keep that stop highlighted and leave the map exactly where it is,
+      // rather than clearing the selection and zooming out to fit the whole
+      // route, which throws away the context the user just zoomed in for.
+      setSelectedStop(originStop);
+    } else {
+      setSelectedStop(null);
+      if (mapRef.current && route.stops.length > 0) {
+        const bounds = L.latLngBounds(route.stops.map((s) => [s.lat, s.lng]));
+        mapRef.current.fitBounds(bounds, { padding: [60, 60] });
+      }
     }
     setSidebarOpen(true);
   }, []);
@@ -133,7 +153,7 @@ export default function BusTracker() {
       setPanelMode("stop");
     }
     if (mapRef.current) {
-      mapRef.current.setView([stop.lat, stop.lng], 16, { animate: true });
+      mapRef.current.setView([stop.lat, stop.lng], 17, { animate: true });
     }
     setSidebarOpen(true);
   }, []);
@@ -142,7 +162,7 @@ export default function BusTracker() {
     setSelectedStop(stop);
     setPanelMode("stop");
     if (mapRef.current) {
-      mapRef.current.setView([stop.lat, stop.lng], 16, { animate: true });
+      mapRef.current.setView([stop.lat, stop.lng], 17, { animate: true });
     }
     setSidebarOpen(true);
   }, []);
@@ -155,12 +175,16 @@ export default function BusTracker() {
   }, [halfSnap]);
 
   const handleOpenPlanner = useCallback(() => {
+    setSelectedStop(null);
+    setSelectedRoute(null);
     setPanelMode("planner");
     setSidebarOpen(true);
     setSheetHeight(halfSnap);
   }, [halfSnap]);
 
   const handleOpenNearby = useCallback(() => {
+    setSelectedStop(null);
+    setSelectedRoute(null);
     setPanelMode("nearby");
     setSidebarOpen(true);
     setSheetHeight(halfSnap);
@@ -175,6 +199,8 @@ export default function BusTracker() {
   }, [halfSnap, geo]);
 
   const handleOpenFavorites = useCallback(() => {
+    setSelectedStop(null);
+    setSelectedRoute(null);
     setPanelMode("favorites");
     setSidebarOpen(true);
     setSheetHeight(halfSnap);
@@ -286,7 +312,7 @@ export default function BusTracker() {
       className="flex flex-col h-full min-h-0"
     >
           <FavoritesPanel
-        onSelectRoute={handleSelectRoute}
+        onSelectStop={handleSelectStop}
         onClose={handleClearAll} />
       
         </motion.div> :
@@ -370,19 +396,21 @@ export default function BusTracker() {
             </button>
           </div>
 
-          {/* Route carousel */}
-          <RouteCarousel
-        routes={filteredRoutes}
-        selectedRoute={selectedRoute}
-        onSelectRoute={handleSelectRoute} />
-      
+          {/* Route list — scrolls vertically through all routes */}
+          <div className="flex-1 min-h-0 overflow-y-auto">
+            <RouteCarousel
+              routes={filteredRoutes}
+              selectedRoute={selectedRoute}
+              onSelectRoute={handleSelectRoute}
+            />
 
-          <div className="px-4 py-3 border-t border-border/40 flex-shrink-0">
-            <div className="flex items-start gap-2 bg-muted/50 rounded-lg p-2.5">
-              <Info className="w-3.5 h-3.5 text-muted-foreground mt-0.5 flex-shrink-0" />
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                {t("app.data_source")}
-              </p>
+            <div className="px-4 py-3 mt-2 border-t border-border/40">
+              <div className="flex items-start gap-2 bg-muted/50 rounded-lg p-2.5">
+                <Info className="w-3.5 h-3.5 text-muted-foreground mt-0.5 flex-shrink-0" />
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  {t("app.data_source")}
+                </p>
+              </div>
             </div>
           </div>
         </>
@@ -397,13 +425,17 @@ export default function BusTracker() {
       <div
         className={cn(
           "hidden md:flex flex-col bg-background border-r border-border flex-shrink-0 transition-all duration-300 z-10",
-          sidebarOpen ? "md:w-80" : "md:w-0 md:overflow-hidden"
+          sidebarOpen ? "md:w-[420px]" : "md:w-0 md:overflow-hidden"
         )}>
         
         {/* Sidebar header */}
         <div className="px-4 pt-4 pb-3 border-b border-border/60 flex-shrink-0 bg-background">
           <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
+            <button
+              onClick={handleClearAll}
+              className="flex items-center gap-2 cursor-pointer hover:opacity-75 transition-opacity"
+              title={t("app.title")}
+            >
               <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
                 <Bus className="w-4 h-4 text-primary-foreground" />
               </div>
@@ -411,7 +443,7 @@ export default function BusTracker() {
                 <h1 className="text-sm font-bold leading-tight">{t("app.title")}</h1>
                 
               </div>
-            </div>
+            </button>
             <div className="flex items-center gap-1.5">
               <LangToggle />
               <button
@@ -438,15 +470,50 @@ export default function BusTracker() {
       {/* ── MAP ────────────────────────────────────────────────────────────── */}
       <div className="flex-1 relative">
 
-        {/* Desktop: sidebar toggle */}
-        <button
-          onClick={() => setSidebarOpen((v) => !v)}
-          className="hidden md:flex absolute top-4 left-0 z-[1000] bg-background border border-border shadow-lg rounded-r-lg p-2 cursor-pointer hover:bg-accent transition-colors items-center">
-          
-          <ChevronDown
-            className={cn("w-4 h-4 transition-transform", sidebarOpen ? "-rotate-90" : "rotate-90")} />
-          
-        </button>
+        {/* Desktop: sidebar toggle, search bar, and geolocate button share one
+            flex row — flex items in a row can't overlap each other by
+            construction, and the search bar centers in whatever space
+            remains between the two buttons, at any window width. */}
+        <div className="hidden md:flex absolute top-4 left-0 right-4 z-[1000] items-center gap-3">
+          <button
+            onClick={() => setSidebarOpen((v) => !v)}
+            className="flex-shrink-0 bg-background border border-border shadow-lg rounded-r-lg p-2 cursor-pointer hover:bg-accent transition-colors flex items-center">
+            <ChevronDown
+              className={cn("w-4 h-4 transition-transform", sidebarOpen ? "-rotate-90" : "rotate-90")} />
+          </button>
+
+          <div className="flex-1 min-w-0 flex justify-center">
+            <div className="w-full max-w-xl">
+              <GlobalSearchBar
+                onSelectRoute={handleSelectRoute}
+                onSelectStop={(stop) => handleSelectStop(stop, null)}
+              />
+            </div>
+          </div>
+
+          <button
+            onClick={handleLocateMe}
+            className={cn(
+              "flex-shrink-0 bg-background border border-border shadow-lg rounded-lg p-2 cursor-pointer hover:bg-accent transition-colors",
+              geo.status === "granted" && "ring-2 ring-primary/50"
+            )}
+            title={t("nearby.title")}>
+            <Locate className={cn("w-4 h-4", geo.status === "granted" ? "text-primary" : "text-muted-foreground")} />
+          </button>
+        </div>
+
+        {/* Mobile: geolocate button, positioned above the sheet's peek height */}
+        <div className="md:hidden absolute bottom-32 right-4 z-[1000]">
+          <button
+            onClick={handleLocateMe}
+            className={cn(
+              "bg-background border border-border shadow-lg rounded-lg p-2 cursor-pointer hover:bg-accent transition-colors",
+              geo.status === "granted" && "ring-2 ring-primary/50"
+            )}
+            title={t("nearby.title")}>
+            <Locate className={cn("w-4 h-4", geo.status === "granted" ? "text-primary" : "text-muted-foreground")} />
+          </button>
+        </div>
 
         {/* Desktop: trip planner FAB when sidebar hidden */}
         {!sidebarOpen &&
@@ -481,31 +548,19 @@ export default function BusTracker() {
           </div>
         }
 
-        {/* Map controls */}
-        <div className="absolute top-4 right-4 z-[1000] flex flex-col gap-2">
-          <button
-            onClick={handleLocateMe}
-            className={cn(
-              "bg-background border border-border shadow-lg rounded-lg p-2 cursor-pointer hover:bg-accent transition-colors",
-              geo.status === "granted" && "ring-2 ring-primary/50"
-            )}
-            title={t("nearby.title")}>
-            
-            <Locate className={cn("w-4 h-4", geo.status === "granted" ? "text-primary" : "text-muted-foreground")} />
-          </button>
-        </div>
-
         {/* Offline indicator */}
         <OfflineBanner />
 
         <MapContainer
           center={TIRANA_CENTER}
           zoom={13}
+          maxZoom={21}
           className="w-full h-full"
           zoomControl={false}
           ref={handleMapRef}>
           
           <TileLayer
+            maxZoom={21}
             url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a> &middot; Transit data &copy; <a href="https://tirana.al/">Municipality of Tirana</a> (<a href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a>)' />
           
@@ -528,13 +583,14 @@ export default function BusTracker() {
           }
 
           {BUS_ROUTES.map((route) => {
-            const isFiltered = activeArea ? getRouteAreas(route).includes(activeArea) : true;
+            const isFiltered = activeArea ? getRouteAreas(route).includes(activeArea) : false;
             return (
               <RoutePolyline
                 key={route.id}
                 route={route}
                 isSelected={selectedRoute?.id === route.id}
                 isHighlighted={panelMode === "list" && isFiltered}
+                selectedStopGtfsId={selectedStop?.gtfsStopId ?? null}
                 onStopClick={(stop, r) => {
                   if (selectedRoute?.id === r.id) handleStopDetail(stop);
                   else handleSelectStop(stop, r);
@@ -546,22 +602,24 @@ export default function BusTracker() {
           {/* Show all stops when zoomed in */}
           <ZoomStopMarkers
             selectedRouteId={selectedRoute?.id ?? null}
-            onStopClick={(stop, route) => {
-              if (selectedRoute?.id === route.id) handleStopDetail(stop);
-              else handleSelectStop(stop, route);
-            }}
+            selectedStopGtfsId={selectedStop?.gtfsStopId ?? null}
+            onStopClick={(stop) => handleSelectStop(stop, null)}
           />
         </MapContainer>
 
         {/* ── MOBILE: floating top bar ──────────────────────────────────── */}
-        <div className="md:hidden absolute top-0 left-0 right-0 z-[1000] px-3 pt-3 pb-2 pointer-events-none">
+        <div className="md:hidden absolute top-0 left-0 right-0 z-[1000] px-3 pt-3 pb-2 flex flex-col gap-2 pointer-events-none">
           <div className="flex items-center gap-2 pointer-events-auto">
-            {/* App badge */}
-            <div className="w-9 h-9 bg-primary rounded-xl flex items-center justify-center shadow-lg flex-shrink-0">
+            {/* App badge — doubles as a home button */}
+            <button
+              onClick={handleClearAll}
+              title={t("app.title")}
+              className="w-9 h-9 bg-primary rounded-xl flex items-center justify-center shadow-lg flex-shrink-0 cursor-pointer hover:opacity-80 transition-opacity"
+            >
               <Bus className="w-4 h-4 text-primary-foreground" />
-            </div>
+            </button>
 
-            {/* Lang toggle (replaces search bar on mobile top) */}
+            {/* Lang toggle — search now lives in its own row below this bar */}
             <div className="flex-1 min-w-0 flex items-center gap-2">
               <LangToggle />
             </div>
@@ -601,6 +659,15 @@ export default function BusTracker() {
               <Navigation className="w-3.5 h-3.5" />
               <span>{t("mobile.plan")}</span>
             </button>
+          </div>
+
+          {/* Search — a natural second row, so it can never overlap the
+              buttons above it regardless of their actual rendered height */}
+          <div className="pointer-events-auto">
+            <GlobalSearchBar
+              onSelectRoute={handleSelectRoute}
+              onSelectStop={(stop) => handleSelectStop(stop, null)}
+            />
           </div>
         </div>
 

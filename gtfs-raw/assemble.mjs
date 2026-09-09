@@ -18,6 +18,8 @@ export type BusStop = {
   lng: number;
   // Minutes of travel from the previous stop (null for the first stop)
   travelMinutes: number | null;
+  /** Stable ID from the official GTFS feed. Use this in gtfs-raw/overrides.json to move/rename/hide this exact stop. */
+  gtfsStopId: string;
 };
 
 export type BusRoute = {
@@ -34,6 +36,10 @@ export type BusRoute = {
   stops: BusStop[];
   /** Real road-following polyline from the GTFS shapes.txt feed, [lat, lng] pairs. */
   shape: [number, number][];
+  /** Stops for the opposite/return direction (often the other side of the road). Empty if the route has no separate return direction in GTFS. */
+  stopsReturn: BusStop[];
+  /** Shape polyline for the opposite/return direction. Empty if none exists. */
+  shapeReturn: [number, number][];
 };
 
 // Central Tirana landmarks (lat/lng anchors)

@@ -1,5 +1,6 @@
 import L from "leaflet";
-import { Marker, Popup } from "react-leaflet";
+import { useEffect, useRef } from "react";
+import { Marker } from "react-leaflet";
 import type { BusRoute, BusStop } from "@/data/tirana-bus-data.ts";
 
 type Props = {
@@ -7,17 +8,41 @@ type Props = {
   route: BusRoute;
   isFirst: boolean;
   isLast: boolean;
+  isSelected?: boolean;
   onClick: () => void;
 };
 
-function createStopIcon(color: string, isTerminal: boolean) {
-  const size = isTerminal ? 14 : 10;
+function createStopIcon(isSelected: boolean) {
+  if (isSelected) {
+    // Selected stop: bigger, colored, with a pulsing ring so it's
+    // unmistakable at a glance — the one thing that should visually
+    // "stand out" on an otherwise uniform map.
+    const size = 22;
+    const svg = `
+      <div style="position:relative;width:${size}px;height:${size}px;">
+        <span class="animate-ping" style="position:absolute;inset:0;border-radius:9999px;background:var(--primary);opacity:0.5;"></span>
+        <svg width="${size}" height="${size}" style="position:relative;">
+          <circle cx="${size / 2}" cy="${size / 2}" r="${size / 2 - 2}"
+            fill="var(--primary)" stroke="white" stroke-width="3"/>
+        </svg>
+      </div>
+    `;
+    return L.divIcon({
+      html: svg,
+      iconSize: [size, size],
+      iconAnchor: [size / 2, size / 2],
+      className: "",
+    });
+  }
+
+  // Default: every stop looks identical regardless of which route(s) serve
+  // it — differentiating stops by route color was what made the map read
+  // as chaotic once multiple routes' stops overlapped on screen.
+  const size = 9;
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" width="${size + 4}" height="${size + 4}">
-      <circle cx="${(size + 4) / 2}" cy="${(size + 4) / 2}" r="${size / 2}" 
-        fill="${isTerminal ? color : "white"}" 
-        stroke="${color}" 
-        stroke-width="${isTerminal ? 2 : 2.5}"/>
+      <circle cx="${(size + 4) / 2}" cy="${(size + 4) / 2}" r="${size / 2}"
+        fill="white" stroke="#94a3b8" stroke-width="2"/>
     </svg>
   `;
   return L.divIcon({
@@ -28,33 +53,22 @@ function createStopIcon(color: string, isTerminal: boolean) {
   });
 }
 
-export default function StopMarker({ stop, route, isFirst, isLast, onClick }: Props) {
-  const isTerminal = isFirst || isLast;
-  const icon = createStopIcon(route.color, isTerminal);
+export default function StopMarker({ stop, isSelected = false, onClick }: Props) {
+  const icon = createStopIcon(isSelected);
+  const markerRef = useRef<L.Marker>(null);
+
+  // Selected stops render above unselected ones so the highlight ring never
+  // gets visually clipped by a neighboring stop's marker.
+  useEffect(() => {
+    if (isSelected) markerRef.current?.setZIndexOffset(1000);
+  }, [isSelected]);
 
   return (
     <Marker
+      ref={markerRef}
       position={[stop.lat, stop.lng]}
       icon={icon}
       eventHandlers={{ click: onClick }}
-    >
-      <Popup>
-        <div className="min-w-[160px]">
-          <p className="font-semibold text-sm">{stop.name}</p>
-          <div className="flex items-center gap-1 mt-1">
-            <span
-              className="inline-block w-3 h-3 rounded-full flex-shrink-0"
-              style={{ backgroundColor: route.color }}
-            />
-            <span className="text-xs text-gray-600">Line {route.number}</span>
-          </div>
-          {isTerminal && (
-            <span className="text-xs text-gray-500 mt-1 block">
-              {isFirst ? "Starting Terminal" : "End Terminal"}
-            </span>
-          )}
-        </div>
-      </Popup>
-    </Marker>
+    />
   );
 }

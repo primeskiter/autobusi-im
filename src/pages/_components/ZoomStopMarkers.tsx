@@ -5,7 +5,8 @@ import StopMarker from "./StopMarker.tsx";
 
 type Props = {
   selectedRouteId: string | null;
-  onStopClick: (stop: BusStop, route: BusRoute) => void;
+  selectedStopGtfsId: string | null;
+  onStopClick: (stop: BusStop) => void;
 };
 
 /** Minimum zoom level to show individual bus stops */
@@ -14,8 +15,10 @@ const MIN_ZOOM_FOR_STOPS = 15;
 /**
  * Renders all bus stops on the map when the user zooms in past a threshold.
  * Stops from the currently selected route are excluded (they are rendered by RoutePolyline).
+ * Deduplicated by the real GTFS stop ID so a physical stop shared by
+ * several routes only ever renders once, instead of once per route.
  */
-export default function ZoomStopMarkers({ selectedRouteId, onStopClick }: Props) {
+export default function ZoomStopMarkers({ selectedRouteId, selectedStopGtfsId, onStopClick }: Props) {
   const [zoom, setZoom] = useState<number>(13);
 
   useMapEvents({
@@ -26,8 +29,8 @@ export default function ZoomStopMarkers({ selectedRouteId, onStopClick }: Props)
 
   if (zoom < MIN_ZOOM_FOR_STOPS) return null;
 
-  // Collect unique stops across all routes (deduplicated by stop id)
-  // but keep track of which route each stop belongs to for the marker
+  // Collect unique physical stops across all routes (deduplicated by the
+  // real GTFS stop id, not the per-route/per-direction generated id)
   const renderedStopIds = new Set<string>();
   const stopsToRender: { stop: BusStop; route: BusRoute; isFirst: boolean; isLast: boolean }[] = [];
 
@@ -37,13 +40,25 @@ export default function ZoomStopMarkers({ selectedRouteId, onStopClick }: Props)
 
     for (let idx = 0; idx < route.stops.length; idx++) {
       const stop = route.stops[idx]!;
-      if (renderedStopIds.has(stop.id)) continue;
-      renderedStopIds.add(stop.id);
+      if (renderedStopIds.has(stop.gtfsStopId)) continue;
+      renderedStopIds.add(stop.gtfsStopId);
       stopsToRender.push({
         stop,
         route,
         isFirst: idx === 0,
         isLast: idx === route.stops.length - 1,
+      });
+    }
+
+    for (let idx = 0; idx < route.stopsReturn.length; idx++) {
+      const stop = route.stopsReturn[idx]!;
+      if (renderedStopIds.has(stop.gtfsStopId)) continue;
+      renderedStopIds.add(stop.gtfsStopId);
+      stopsToRender.push({
+        stop,
+        route,
+        isFirst: idx === 0,
+        isLast: idx === route.stopsReturn.length - 1,
       });
     }
   }
@@ -52,12 +67,13 @@ export default function ZoomStopMarkers({ selectedRouteId, onStopClick }: Props)
     <>
       {stopsToRender.map(({ stop, route, isFirst, isLast }) => (
         <StopMarker
-          key={stop.id}
+          key={stop.gtfsStopId}
           stop={stop}
           route={route}
           isFirst={isFirst}
           isLast={isLast}
-          onClick={() => onStopClick(stop, route)}
+          isSelected={stop.gtfsStopId === selectedStopGtfsId}
+          onClick={() => onStopClick(stop)}
         />
       ))}
     </>

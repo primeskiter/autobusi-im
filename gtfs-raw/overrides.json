@@ -1,0 +1,17 @@
+{
+  "_readme": "Manual corrections applied on top of the official GTFS feed every time the pipeline runs (python3 gtfs-raw/build_data.py). Your fixes here survive future GTFS re-imports — never edit src/data/tirana-bus-data.ts by hand, it gets overwritten.",
+
+  "_howToFindAGtfsStopId": "Open gtfs-raw/bus-routes.json after a build and search for the wrong stop by name — each stop entry has a 'gtfsStopId' field. Use that value as the key in moveStops/renameStops/hideStops below.",
+
+  "_moveStops_example": "moveStops: { \"<gtfsStopId>\": { \"lat\": 41.3275, \"lng\": 19.8187 } }",
+  "moveStops": {},
+
+  "_renameStops_example": "renameStops: { \"<gtfsStopId>\": \"Corrected Stop Name\" }",
+  "renameStops": {},
+
+  "_hideStops_example": "hideStops: [ \"<gtfsStopId>\", ... ] -- completely removes a stop that shouldn't exist",
+  "hideStops": [],
+
+  "_addStops_example": "addStops: [ { \"routeId\": \"1A\" (the route's visible short name), \"direction\": \"fwd\" or \"return\", \"name\": \"New Stop\", \"lat\": 41.3275, \"lng\": 19.8187 } ] -- for a real-world stop the municipality's feed is missing entirely",
+  "addStops": []
+}

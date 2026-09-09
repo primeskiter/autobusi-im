@@ -16,7 +16,7 @@ type Props = {
   stop: BusStop;
   activeRoute: BusRoute | null;
   onClose: () => void;
-  onSelectRoute: (route: BusRoute) => void;
+  onSelectRoute: (route: BusRoute, originStop?: BusStop | null) => void;
 };
 
 type RouteAtStop = {
@@ -34,6 +34,17 @@ function buildRoutesAtStop(stop: BusStop): RouteAtStop[] {
         route,
         stopIndex: idx,
         countdowns: getUpcomingDepartureCountdowns(route, idx, 4),
+      });
+      continue;
+    }
+    // Not on the forward direction — check the return direction too, so a
+    // stop served only on the way back still shows up here.
+    const retIdx = route.stopsReturn.findIndex((s) => s.name === stop.name);
+    if (retIdx !== -1) {
+      result.push({
+        route,
+        stopIndex: retIdx,
+        countdowns: getUpcomingDepartureCountdowns(route, retIdx, 4, route.stopsReturn),
       });
     }
   }
@@ -60,6 +71,11 @@ export default function StopDetailPanel({ stop, activeRoute, onClose, onSelectRo
             <p className="text-primary-foreground/70 text-xs mt-1">
               {t("stop.routes_pass", { count: routesAtStop.length })}
             </p>
+            {import.meta.env.DEV && (
+              <p className="text-primary-foreground/50 text-[10px] mt-1 font-mono select-all">
+                ID: {stop.gtfsStopId} &middot; {stop.lat.toFixed(6)}, {stop.lng.toFixed(6)}
+              </p>
+            )}
           </div>
           <button
             onClick={onClose}
@@ -70,7 +86,7 @@ export default function StopDetailPanel({ stop, activeRoute, onClose, onSelectRo
         </div>
       </div>
 
-      <ScrollArea className="flex-1">
+      <ScrollArea className="flex-1 min-h-0">
         {routesAtStop.length === 0 ? (
           <div className="px-4 py-8 text-center text-muted-foreground text-sm">
             {t("stop.no_departures")}
@@ -93,7 +109,7 @@ export default function StopDetailPanel({ stop, activeRoute, onClose, onSelectRo
                   style={isActive ? { borderColor: route.color } : {}}
                 >
                   <button
-                    onClick={() => onSelectRoute(route)}
+                    onClick={() => onSelectRoute(route, stop)}
                     className="w-full flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-accent/50 transition-colors"
                   >
                     <span

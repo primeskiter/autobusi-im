@@ -1,7 +1,7 @@
 import csv
 import io
 import json
-import statistics
+import math
 import zipfile
 from collections import defaultdict
 from datetime import date
@@ -19,15 +19,12 @@ def read_csv(name):
 
 
 def open_csv_reader(name):
-    """Streaming reader for large files (e.g. stop_times.txt) — avoids loading
-    the whole file into memory as dict rows before we've filtered anything."""
     raw = _zip.open(name)
     text = io.TextIOWrapper(raw, encoding="utf-8-sig", newline="")
     return csv.DictReader(text)
 
 
 def time_to_minutes(t):
-    """GTFS times can exceed 24:00:00 for past-midnight trips."""
     h, m, s = t.split(":")
     return int(h) * 60 + int(m) + int(s) / 60
 
@@ -39,6 +36,56 @@ def minutes_to_hhmm(total_minutes):
     return f"{h:02d}:{m:02d}"
 
 
+def natural_sort_key(short_name):
+    import re
+    m = re.match(r"(\d+)([A-Za-z]*)", short_name)
+    if not m:
+        return (999, short_name)
+    return (int(m.group(1)), m.group(2))
+
+
+# ── Planar projection helpers (Tirana is small enough that flat-earth is fine) ─
+M_PER_DEG_LAT = 111_320.0
+
+
+def m_per_deg_lon(lat):
+    return 111_320.0 * math.cos(math.radians(lat))
+
+
+def to_xy(lat, lon, ref_lat):
+    return lon * m_per_deg_lon(ref_lat), lat * M_PER_DEG_LAT
+
+
+def project_point_onto_polyline(lat, lon, poly_xy, cum_dist, ref_lat):
+    px, py = to_xy(lat, lon, ref_lat)
+    best_dist_along = 0.0
+    best_perp = float("inf")
+    for i in range(len(poly_xy) - 1):
+        ax, ay = poly_xy[i]
+        bx, by = poly_xy[i + 1]
+        dx, dy = bx - ax, by - ay
+        seg_len2 = dx * dx + dy * dy
+        if seg_len2 == 0:
+            t = 0.0
+        else:
+            t = ((px - ax) * dx + (py - ay) * dy) / seg_len2
+            t = max(0.0, min(1.0, t))
+        cx, cy = ax + t * dx, ay + t * dy
+        perp = math.hypot(px - cx, py - cy)
+        if perp < best_perp:
+            best_perp = perp
+            best_dist_along = cum_dist[i] + t * (cum_dist[i + 1] - cum_dist[i])
+    return best_dist_along, best_perp
+
+
+def build_polyline_xy_and_cumdist(shape_pts, ref_lat):
+    xy = [to_xy(p_lat, p_lon, ref_lat) for (p_lat, p_lon) in shape_pts]
+    cum = [0.0]
+    for i in range(1, len(xy)):
+        cum.append(cum[-1] + math.hypot(xy[i][0] - xy[i - 1][0], xy[i][1] - xy[i - 1][1]))
+    return xy, cum
+
+
 # ── Load static tables ──────────────────────────────────────────────────────
 routes_raw = read_csv("routes.txt")
 stops_raw = read_csv("stops.txt")
@@ -48,33 +95,115 @@ shapes_raw = read_csv("shapes.txt")
 
 stops_by_id = {s["stop_id"]: s for s in stops_raw}
 
-# ── Pick the weekday service active today ───────────────────────────────────
-candidates = [
-    c for c in calendar_raw
-    if c["monday"] == "1"
-    and int(c["start_date"]) <= TODAY <= int(c["end_date"])
-]
-# Prefer a "normal" Mon-Fri pattern (mon..fri = 1, sat/sun = 0)
-normal = [c for c in candidates if c["tuesday"] == "1" and c["saturday"] == "0" and c["sunday"] == "0"]
-chosen_service = (normal or candidates)[0]["service_id"]
-print(f"Using weekday service: {chosen_service}")
+# ── Manual overrides ─────────────────────────────────────────────────────────
+# Lets you correct individual stops without losing the fix next time the
+# official GTFS feed is re-imported. See gtfs-raw/overrides.json for the format.
+try:
+    with open("gtfs-raw/overrides.json", encoding="utf-8") as f:
+        overrides = json.load(f)
+except FileNotFoundError:
+    overrides = {}
 
-# ── Group trips by route, keep only the chosen service ──────────────────────
-trips_by_route = defaultdict(list)
+move_stops = overrides.get("moveStops", {})       # { gtfs_stop_id: {lat, lng} }
+rename_stops = overrides.get("renameStops", {})   # { gtfs_stop_id: "New Name" }
+hide_stops = set(overrides.get("hideStops", []))  # [ gtfs_stop_id, ... ]
+add_stops = overrides.get("addStops", [])         # [ {routeId, direction, name, lat, lng, afterGtfsStopId?} ]
+
+for sid, pos in move_stops.items():
+    if sid in stops_by_id:
+        stops_by_id[sid]["stop_lat"] = str(pos["lat"])
+        stops_by_id[sid]["stop_lon"] = str(pos["lng"])
+    else:
+        print(f"WARNING: overrides.json moveStops references unknown stop_id {sid}")
+
+for sid, new_name in rename_stops.items():
+    if sid in stops_by_id:
+        stops_by_id[sid]["stop_name"] = new_name
+    else:
+        print(f"WARNING: overrides.json renameStops references unknown stop_id {sid}")
+
+# Manually-added stops get a synthetic stop_id and are injected per-route/direction below
+extra_stop_ids_by_route_dir = defaultdict(set)  # (route_id, "fwd"|"return") -> {synthetic stop_id}
+for i, add in enumerate(add_stops):
+    synthetic_id = f"manual-{i}"
+    stops_by_id[synthetic_id] = {
+        "stop_id": synthetic_id,
+        "stop_name": add["name"],
+        "stop_lat": str(add["lat"]),
+        "stop_lon": str(add["lng"]),
+    }
+    extra_stop_ids_by_route_dir[(add["routeId"], add.get("direction", "fwd"))].add(synthetic_id)
+    # Note: routeId here refers to the route's visible short name (e.g. "1A"),
+    # matched against route_short_name below — not GTFS's internal route_id.
+
+# ── Pick the best weekday service PER ROUTE ─────────────────────────────────
+# Different routes are authored with different (non-overlapping) sets of
+# service_ids — there's no single service_id that covers every route, so a
+# global choice left many routes with zero matching trips, silently falling
+# back to "every trip across every season merged into one day", which
+# produced nonsensical near-zero frequencies. Instead, pick per route: among
+# the service_ids that route actually has trips under, prefer a normal
+# Mon-Fri weekday service whose date range contains today, and among those,
+# the most specific (narrowest) one.
+route_service_ids = defaultdict(set)
 for t in trips_raw:
-    if t["service_id"] == chosen_service:
-        trips_by_route[t["route_id"]].append(t)
+    route_service_ids[t["route_id"]].add(t["service_id"])
 
-relevant_trip_ids = {t["trip_id"] for t in trips_raw if t["service_id"] == chosen_service}
+calendar_by_id = {c["service_id"]: c for c in calendar_raw}
 
-# Fallback: routes with zero trips in the chosen service (shouldn't happen, but be safe)
+weekday_candidates = [
+    c for c in calendar_raw
+    if c["monday"] == "1" and int(c["start_date"]) <= TODAY <= int(c["end_date"])
+]
+normal_candidates = [
+    c for c in weekday_candidates
+    if c["tuesday"] == "1" and c["saturday"] == "0" and c["sunday"] == "0"
+]
+candidate_pool = sorted(
+    normal_candidates or weekday_candidates,
+    key=lambda c: int(c["end_date"]) - int(c["start_date"]),
+)
+
+
+def pick_service_for_route(route_id: str) -> str | None:
+    used = route_service_ids.get(route_id, set())
+    for c in candidate_pool:
+        if c["service_id"] in used:
+            return c["service_id"]
+    # This route has no service covering today at all — fall back to any
+    # Mon-Fri weekday service it does have, preferring the narrowest.
+    own_weekday = [
+        calendar_by_id[sid] for sid in used
+        if sid in calendar_by_id and calendar_by_id[sid]["monday"] == "1"
+    ]
+    if own_weekday:
+        return min(own_weekday, key=lambda c: int(c["end_date"]) - int(c["start_date"]))["service_id"]
+    return None
+
+
+route_chosen_service: dict[str, str | None] = {}
+
+# ── Group trips by route, using each route's own best-matching service ──────
+trips_by_route = defaultdict(list)
+for r in routes_raw:
+    rid = r["route_id"]
+    svc = pick_service_for_route(rid)
+    route_chosen_service[rid] = svc
+    if svc:
+        trips_by_route[rid] = [t for t in trips_raw if t["route_id"] == rid and t["service_id"] == svc]
+
 all_trips_by_route = defaultdict(list)
 for t in trips_raw:
     all_trips_by_route[t["route_id"]].append(t)
 for rid, ts in all_trips_by_route.items():
     if not trips_by_route[rid]:
         trips_by_route[rid] = ts
-        relevant_trip_ids.update(t["trip_id"] for t in ts)
+
+for r in routes_raw:
+    svc = route_chosen_service.get(r["route_id"])
+    print(f"  service for {r['route_short_name']}: {svc or '(fallback: all trips merged)'}")
+
+relevant_trip_ids = {t["trip_id"] for ts in trips_by_route.values() for t in ts}
 
 # ── Single pass over stop_times.txt, keep only relevant trips ───────────────
 stop_times_by_trip = defaultdict(list)
@@ -86,19 +215,118 @@ for trip_id in stop_times_by_trip:
     stop_times_by_trip[trip_id].sort(key=lambda r: int(r["stop_sequence"]))
 
 # ── Group shape points ───────────────────────────────────────────────────────
-shape_points = defaultdict(list)
+shape_points_raw = defaultdict(list)
 for r in shapes_raw:
-    shape_points[r["shape_id"]].append(r)
-for sid in shape_points:
-    shape_points[sid].sort(key=lambda r: int(r["shape_pt_sequence"]))
+    shape_points_raw[r["shape_id"]].append(r)
+for sid in shape_points_raw:
+    shape_points_raw[sid].sort(key=lambda r: int(r["shape_pt_sequence"]))
+shape_latlon = {
+    sid: [(float(p["shape_pt_lat"]), float(p["shape_pt_lon"])) for p in pts]
+    for sid, pts in shape_points_raw.items()
+}
 
 
-def natural_sort_key(short_name):
-    import re
-    m = re.match(r"(\d+)([A-Za-z]*)", short_name)
-    if not m:
-        return (999, short_name)
-    return (int(m.group(1)), m.group(2))
+def build_direction(direction_trips, short_name, suffix, hidden_ids, extra_ids):
+    """Build a merged, correctly-ordered, complete stop list + shape for one
+    direction of a route, by unioning every stop visited by any trip variant
+    (plus any manually-added stops) and ordering them by projected distance
+    along the fullest trip's shape. Manually-hidden stops are excluded."""
+    if not direction_trips and not extra_ids:
+        return None
+
+    backbone = None
+    if direction_trips:
+        backbone = max(direction_trips, key=lambda t: len(stop_times_by_trip.get(t["trip_id"], [])))
+    backbone_rows = stop_times_by_trip.get(backbone["trip_id"], []) if backbone else []
+    if backbone is not None and len(backbone_rows) <= 1:
+        backbone = None
+        backbone_rows = []
+
+    shape_id = backbone.get("shape_id") if backbone else None
+    shape_pts = shape_latlon.get(shape_id, []) if shape_id else []
+    if len(shape_pts) < 2:
+        # Fall back to plotting a line through whatever stops we do have
+        source_ids = [row["stop_id"] for row in backbone_rows] or list(extra_ids)
+        shape_pts = [
+            (float(stops_by_id[sid]["stop_lat"]), float(stops_by_id[sid]["stop_lon"]))
+            for sid in source_ids if sid in stops_by_id
+        ]
+    if len(shape_pts) < 2:
+        return None
+
+    ref_lat = shape_pts[0][0]
+    poly_xy, cum_dist = build_polyline_xy_and_cumdist(shape_pts, ref_lat)
+
+    backbone_time_by_stop = {}
+    for row in backbone_rows:
+        backbone_time_by_stop.setdefault(row["stop_id"], time_to_minutes(row["arrival_time"]))
+
+    union_stop_ids = set(extra_ids)
+    for t in direction_trips:
+        for row in stop_times_by_trip.get(t["trip_id"], []):
+            union_stop_ids.add(row["stop_id"])
+    union_stop_ids -= hidden_ids
+
+    projected = []
+    for sid in union_stop_ids:
+        info = stops_by_id.get(sid)
+        if not info:
+            continue
+        lat, lon = float(info["stop_lat"]), float(info["stop_lon"])
+        dist_along, _perp = project_point_onto_polyline(lat, lon, poly_xy, cum_dist, ref_lat)
+        projected.append((dist_along, sid, info))
+
+    projected.sort(key=lambda x: x[0])
+
+    n = len(projected)
+    times = [backbone_time_by_stop.get(sid) for (_, sid, _) in projected]
+    known_idx = [i for i, tm in enumerate(times) if tm is not None]
+    if known_idx:
+        for i in range(n):
+            if times[i] is not None:
+                continue
+            before = max([k for k in known_idx if k < i], default=None)
+            after = min([k for k in known_idx if k > i], default=None)
+            if before is not None and after is not None:
+                d0, d1 = projected[before][0], projected[after][0]
+                t0, t1 = times[before], times[after]
+                di = projected[i][0]
+                frac = 0.5 if d1 == d0 else (di - d0) / (d1 - d0)
+                times[i] = t0 + frac * (t1 - t0)
+            elif before is not None:
+                times[i] = times[before]
+            elif after is not None:
+                times[i] = times[after]
+    else:
+        times = [0.0] * n
+
+    stops_out = []
+    prev_t = None
+    for i, (dist_along, sid, info) in enumerate(projected):
+        t = times[i]
+        travel_minutes = None if prev_t is None else max(0, round(t - prev_t))
+        stops_out.append({
+            "id": f"{short_name}-{suffix}{i + 1}",
+            "gtfsStopId": sid,
+            "name": info["stop_name"],
+            "lat": float(info["stop_lat"]),
+            "lng": float(info["stop_lon"]),
+            "travelMinutes": travel_minutes,
+        })
+        prev_t = t
+
+    shape_out = [[lat, lon] for (lat, lon) in shape_pts]
+
+    origin_departures = sorted(
+        time_to_minutes(stop_times_by_trip[t["trip_id"]][0]["arrival_time"])
+        for t in direction_trips
+        if stop_times_by_trip.get(t["trip_id"])
+    )
+    return {
+        "stops": stops_out,
+        "shape": shape_out,
+        "origin_departures": origin_departures,
+    }
 
 
 output_routes = []
@@ -114,81 +342,49 @@ for r in routes_raw:
         print(f"WARNING: no trips at all for route {short_name}")
         continue
 
-    # Prefer direction_id "0"
-    dir0 = [t for t in trips if t.get("direction_id") == "0"]
-    direction_trips = dir0 or trips
+    dir0_trips = [t for t in trips if t.get("direction_id") == "0"]
+    dir1_trips = [t for t in trips if t.get("direction_id") == "1"]
+    if not dir0_trips and not dir1_trips:
+        dir0_trips = trips
 
-    # Pick the trip with the most stop_times rows as the "fullest" representative pattern
-    best_trip = None
-    best_len = -1
-    for t in direction_trips:
-        st = stop_times_by_trip.get(t["trip_id"], [])
-        if len(st) > best_len:
-            best_len = len(st)
-            best_trip = t
+    fwd = build_direction(
+        dir0_trips, short_name, "", hide_stops,
+        extra_stop_ids_by_route_dir.get((short_name, "fwd"), set()),
+    )
+    ret = build_direction(
+        dir1_trips, short_name, "R", hide_stops,
+        extra_stop_ids_by_route_dir.get((short_name, "return"), set()),
+    )
 
-    if best_trip is None or best_len <= 1:
+    if fwd is None and ret is None:
         print(f"WARNING: no usable stop_times for route {short_name}")
         continue
+    if fwd is None:
+        fwd, ret = ret, None
 
-    st_rows = stop_times_by_trip[best_trip["trip_id"]]
-
-    stops_out = []
-    prev_arrival = None
-    for i, row in enumerate(st_rows):
-        stop_info = stops_by_id.get(row["stop_id"])
-        if not stop_info:
-            continue
-        arrival = time_to_minutes(row["arrival_time"])
-        travel_minutes = None if prev_arrival is None else round(arrival - prev_arrival)
-        stops_out.append({
-            "id": f"{short_name}-{i + 1}",
-            "name": stop_info["stop_name"],
-            "lat": float(stop_info["stop_lat"]),
-            "lng": float(stop_info["stop_lon"]),
-            "travelMinutes": travel_minutes,
-        })
-        prev_arrival = arrival
-
-    # ── Shape polyline ──────────────────────────────────────────────────────
-    shape_id = best_trip.get("shape_id")
-    shape_out = []
-    if shape_id and shape_id in shape_points:
-        shape_out = [
-            [float(p["shape_pt_lat"]), float(p["shape_pt_lon"])]
-            for p in shape_points[shape_id]
-        ]
-
-    # ── Frequency / first-last departure across all trips in this direction ─
-    origin_departures = []
-    for t in direction_trips:
-        st = stop_times_by_trip.get(t["trip_id"])
-        if st:
-            origin_departures.append(time_to_minutes(st[0]["arrival_time"]))
-    origin_departures.sort()
-
-    if len(origin_departures) >= 2:
-        gaps = [b - a for a, b in zip(origin_departures, origin_departures[1:]) if b - a > 0]
-        gaps.sort()
-        if gaps:
-            median_gap = statistics.median(gaps)
-            lo = gaps[max(0, int(len(gaps) * 0.25))]
-            hi = gaps[min(len(gaps) - 1, int(len(gaps) * 0.75))]
-            lo, hi = round(lo), round(hi)
-            if lo == hi:
-                hi = lo + 5
-            frequency_minutes = round(median_gap)
-        else:
-            frequency_minutes = 15
-            lo, hi = 12, 18
-        first_departure = minutes_to_hhmm(origin_departures[0])
-        last_departure = minutes_to_hhmm(origin_departures[-1])
+    # Frequency is based on the forward direction's own departures only —
+    # mixing in the return direction's departures was measuring the gap
+    # between two unrelated buses (one leaving each end of the route),
+    # which produced nonsensical near-zero frequencies.
+    fwd_departures = sorted(fwd["origin_departures"])
+    if len(fwd_departures) >= 2:
+        span = fwd_departures[-1] - fwd_departures[0]
+        avg_headway = span / (len(fwd_departures) - 1)
+        frequency_minutes = max(1, round(avg_headway))
+        # Display range as a band around the average rather than raw gap
+        # percentiles — a handful of duplicate/near-simultaneous trips in the
+        # source data (express + local leaving together, etc.) can otherwise
+        # skew a percentile-based range down to something misleadingly tiny.
+        lo = max(1, round(avg_headway * 0.7))
+        hi = max(lo + 1, round(avg_headway * 1.3))
+        first_departure = minutes_to_hhmm(fwd_departures[0])
+        last_departure = minutes_to_hhmm(fwd_departures[-1])
     else:
-        frequency_minutes = 15
-        lo, hi = 12, 18
-        first_departure = minutes_to_hhmm(origin_departures[0]) if origin_departures else "06:00"
+        frequency_minutes, lo, hi = 15, 12, 18
+        first_departure = minutes_to_hhmm(fwd_departures[0]) if fwd_departures else "06:00"
         last_departure = first_departure
 
+    stops_out = fwd["stops"]
     first_stop_name = stops_out[0]["name"] if stops_out else "?"
     last_stop_name = stops_out[-1]["name"] if stops_out else "?"
 
@@ -204,7 +400,9 @@ for r in routes_raw:
         "firstDeparture": first_departure,
         "lastDeparture": last_departure,
         "stops": stops_out,
-        "shape": shape_out,
+        "shape": fwd["shape"],
+        "stopsReturn": ret["stops"] if ret else [],
+        "shapeReturn": ret["shape"] if ret else [],
     })
 
 output_routes.sort(key=lambda r: natural_sort_key(r["id"]))
@@ -214,4 +412,8 @@ with open("gtfs-raw/bus-routes.json", "w", encoding="utf-8") as f:
 
 print(f"Wrote {len(output_routes)} routes to gtfs-raw/bus-routes.json")
 for r in output_routes:
-    print(f"  {r['id']:5s} {r['name']:45s} stops={len(r['stops']):3d} shapePts={len(r['shape']):5d} freq={r['frequency']}")
+    print(
+        f"  {r['id']:5s} {r['name']:45s} "
+        f"fwd_stops={len(r['stops']):3d} ret_stops={len(r['stopsReturn']):3d} "
+        f"fwd_shape={len(r['shape']):5d} ret_shape={len(r['shapeReturn']):5d} freq={r['frequency']}"
+    )

@@ -32,7 +32,7 @@ function RouteSlider({
 }) {
   const { t } = useTranslation("common");
   const trackRef = useRef<HTMLDivElement>(null);
-  const cumulative = getCumulativeTravelMinutes(route);
+  const cumulative = getCumulativeTravelMinutes(route.stops);
   const total = cumulative[route.stops.length - 1] ?? 1;
   const pct = total > 0 ? ((cumulative[activeIndex] ?? 0) / total) * 100 : 0;
 
@@ -133,14 +133,14 @@ export default function RouteDetailPanel({ route, selectedStop, onClose, onStopC
   const { t } = useTranslation("common");
   // Re-render every 30s to keep countdowns fresh
   useCountdownTick(30000);
-  const cumulative = getCumulativeTravelMinutes(route);
+  const cumulative = getCumulativeTravelMinutes(route.stops);
   const totalMinutes = cumulative[route.stops.length - 1] ?? 0;
   const [sliderIndex, setSliderIndex] = useState(0);
   const stopListRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (selectedStop) {
-      const idx = route.stops.findIndex((s) => s.id === selectedStop.id);
+      const idx = route.stops.findIndex((s) => s.gtfsStopId === selectedStop.gtfsStopId);
       if (idx !== -1) setSliderIndex(idx);
     }
   }, [selectedStop, route.stops]);
@@ -242,7 +242,7 @@ export default function RouteDetailPanel({ route, selectedStop, onClose, onStopC
         color={route.color}
       />
 
-      <ScrollArea className="flex-1">
+      <ScrollArea className="flex-1 min-h-0">
         <div className="py-2" ref={stopListRef}>
           <p className="px-4 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
             {t("route.stops_section")}
@@ -250,7 +250,7 @@ export default function RouteDetailPanel({ route, selectedStop, onClose, onStopC
           {route.stops.map((stop, idx) => {
             const isTerminal = idx === 0 || idx === route.stops.length - 1;
             const isActive = sliderIndex === idx;
-            const cumulMin = cumulative[idx] ?? 0;
+            const nextHere = getUpcomingDepartureCountdowns(route, idx, 1)[0];
 
             return (
               <button
@@ -283,9 +283,24 @@ export default function RouteDetailPanel({ route, selectedStop, onClose, onStopC
                     <p className={cn("text-sm text-foreground leading-tight", isTerminal && "font-semibold")}>
                       {stop.name}
                     </p>
-                    <span className="text-xs text-muted-foreground font-mono flex-shrink-0 tabular-nums mt-0.5">
-                      {cumulMin === 0 ? "0'" : `+${cumulMin}'`}
-                    </span>
+                    {nextHere ? (
+                      <span
+                        className={cn(
+                          "text-xs font-mono font-semibold flex-shrink-0 tabular-nums mt-0.5 px-1.5 py-0.5 rounded",
+                          nextHere.minutesAway <= 5
+                            ? "bg-emerald-500 text-white"
+                            : "bg-muted text-foreground"
+                        )}
+                      >
+                        {nextHere.minutesAway === 0
+                          ? t("countdown.now")
+                          : t("countdown.min", { min: nextHere.minutesAway })}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-muted-foreground/60 flex-shrink-0 mt-0.5">
+                        {t("route.no_more_today")}
+                      </span>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-2 mt-1 flex-wrap">

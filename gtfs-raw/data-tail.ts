@@ -19,11 +19,11 @@ function minutesToTime(totalMinutes: number): string {
  * Returns the cumulative travel minutes from the first stop to each stop index.
  * Index 0 is always 0.
  */
-export function getCumulativeTravelMinutes(route: BusRoute): number[] {
+export function getCumulativeTravelMinutes(stops: BusStop[]): number[] {
   const result: number[] = [0];
-  for (let i = 1; i < route.stops.length; i++) {
+  for (let i = 1; i < stops.length; i++) {
     const prev = result[i - 1] ?? 0;
-    result.push(prev + (route.stops[i]?.travelMinutes ?? 3));
+    result.push(prev + (stops[i]?.travelMinutes ?? 3));
   }
   return result;
 }
@@ -35,11 +35,12 @@ export function getCumulativeTravelMinutes(route: BusRoute): number[] {
 export function getUpcomingDepartures(
   route: BusRoute,
   stopIndex: number,
-  count = 5
+  count = 5,
+  stops: BusStop[] = route.stops
 ): string[] {
   const now = new Date();
   const nowMinutes = now.getHours() * 60 + now.getMinutes();
-  const cumulative = getCumulativeTravelMinutes(route);
+  const cumulative = getCumulativeTravelMinutes(stops);
   const offsetAtStop = cumulative[stopIndex] ?? 0;
 
   const firstMin = timeToMinutes(route.firstDeparture);
@@ -75,11 +76,12 @@ export type DepartureCountdown = {
 export function getUpcomingDepartureCountdowns(
   route: BusRoute,
   stopIndex: number,
-  count = 4
+  count = 4,
+  stops: BusStop[] = route.stops
 ): DepartureCountdown[] {
   const now = new Date();
   const nowMinutes = now.getHours() * 60 + now.getMinutes();
-  const cumulative = getCumulativeTravelMinutes(route);
+  const cumulative = getCumulativeTravelMinutes(stops);
   const offsetAtStop = cumulative[stopIndex] ?? 0;
 
   const firstMin = timeToMinutes(route.firstDeparture);
@@ -197,24 +199,72 @@ function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): nu
 }
 
 /**
- * Find stops whose name fuzzy-matches a query string (case-insensitive substring).
- * Returns unique stop names sorted by relevance.
+ * Normalizes text for search comparisons: lowercases and strips diacritics
+ * (ë → e, ç → c, etc.) so "Kombetar" matches "Kombëtar" and typing without
+ * Albanian accent marks still finds the right stop/route.
+ */
+export function normalizeForSearch(s: string): string {
+  return s
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+/**
+ * Find stops whose name fuzzy-matches a query string (diacritic-insensitive
+ * substring match). Results starting with the query rank above results that
+ * merely contain it. Returns unique stop names.
  */
 export function fuzzyMatchStops(query: string, limit = 8): string[] {
-  const q = query.toLowerCase().trim();
+  const q = normalizeForSearch(query);
   if (!q) return [];
   const seen = new Set<string>();
-  const results: string[] = [];
+  const starts: string[] = [];
+  const contains: string[] = [];
   for (const route of BUS_ROUTES) {
     for (const stop of route.stops) {
-      if (!seen.has(stop.name) && stop.name.toLowerCase().includes(q)) {
+      if (seen.has(stop.name)) continue;
+      const n = normalizeForSearch(stop.name);
+      if (n.startsWith(q)) {
         seen.add(stop.name);
-        results.push(stop.name);
-        if (results.length >= limit) return results;
+        starts.push(stop.name);
+      } else if (n.includes(q)) {
+        seen.add(stop.name);
+        contains.push(stop.name);
       }
     }
   }
-  return results;
+  return [...starts, ...contains].slice(0, limit);
+}
+
+/**
+ * Find routes whose number or name fuzzy-matches a query string
+ * (diacritic-insensitive). Matching by route number (e.g. "1A") ranks above
+ * matching by name.
+ */
+export function fuzzyMatchRoutes(query: string, limit = 6): BusRoute[] {
+  const q = normalizeForSearch(query);
+  if (!q) return [];
+  const byNumber: BusRoute[] = [];
+  const byName: BusRoute[] = [];
+  for (const route of BUS_ROUTES) {
+    if (normalizeForSearch(route.number).startsWith(q)) {
+      byNumber.push(route);
+    } else if (normalizeForSearch(route.name).includes(q)) {
+      byName.push(route);
+    }
+  }
+  return [...byNumber, ...byName].slice(0, limit);
+}
+
+/** Look up a full BusStop (with coordinates) by its name. */
+export function findStopByName(name: string): BusStop | null {
+  for (const route of BUS_ROUTES) {
+    const stop = route.stops.find((s) => s.name === name);
+    if (stop) return stop;
+  }
+  return null;
 }
 
 /** All unique stop names */
@@ -231,7 +281,7 @@ export function getAllStopNames(): string[] {
  * using the cumulative array.
  */
 function legMinutes(route: BusRoute, from: number, to: number): number {
-  const cum = getCumulativeTravelMinutes(route);
+  const cum = getCumulativeTravelMinutes(route.stops);
   return (cum[to] ?? 0) - (cum[from] ?? 0);
 }
 

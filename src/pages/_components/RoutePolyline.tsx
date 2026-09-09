@@ -8,6 +8,7 @@ type Props = {
   route: BusRoute;
   isSelected: boolean;
   isHighlighted: boolean;
+  selectedStopGtfsId?: string | null;
   onStopClick: (stop: BusStop, route: BusRoute) => void;
   /** Road-snapped geometry from OSRM. Falls back to stop-to-stop lines if not provided. */
   roadGeometry?: [number, number][];
@@ -42,6 +43,7 @@ export default function RoutePolyline({
   route,
   isSelected,
   isHighlighted,
+  selectedStopGtfsId = null,
   onStopClick,
   roadGeometry,
 }: Props) {
@@ -52,6 +54,9 @@ export default function RoutePolyline({
     (route.shape && route.shape.length > 1 ? route.shape : undefined) ??
     roadGeometry ??
     route.stops.map((s) => [s.lat, s.lng] as [number, number]);
+
+  const returnPositions: [number, number][] | null =
+    route.shapeReturn && route.shapeReturn.length > 1 ? route.shapeReturn : null;
 
   const weight = isSelected ? 6 : isHighlighted ? 4 : 2;
   // Dim routes that are not highlighted (filtered out) unless selected
@@ -82,6 +87,19 @@ export default function RoutePolyline({
           lineJoin: "round",
         }}
       />
+      {/* Return-direction line, drawn slightly thinner so both are visible where they diverge */}
+      {returnPositions && (
+        <Polyline
+          positions={returnPositions}
+          pathOptions={{
+            color: route.color,
+            weight: Math.max(1, weight - 2),
+            opacity: opacity * 0.85,
+            lineCap: "round",
+            lineJoin: "round",
+          }}
+        />
+      )}
       {/* Clickable overlay for non-selected routes */}
       {!isSelected && isHighlighted && (
         <ClickableOverlay
@@ -89,7 +107,8 @@ export default function RoutePolyline({
           onClick={() => onStopClick(route.stops[0]!, route)}
         />
       )}
-      {/* Show stops only for selected route */}
+      {/* Show stops only for selected route — both directions, so stops on
+          both sides of the road are visible */}
       {isSelected &&
         route.stops.map((stop, idx) => (
           <StopMarker
@@ -98,6 +117,19 @@ export default function RoutePolyline({
             route={route}
             isFirst={idx === 0}
             isLast={idx === route.stops.length - 1}
+            isSelected={stop.gtfsStopId === selectedStopGtfsId}
+            onClick={() => onStopClick(stop, route)}
+          />
+        ))}
+      {isSelected &&
+        route.stopsReturn.map((stop, idx) => (
+          <StopMarker
+            key={stop.id}
+            stop={stop}
+            route={route}
+            isFirst={idx === 0}
+            isLast={idx === route.stopsReturn.length - 1}
+            isSelected={stop.gtfsStopId === selectedStopGtfsId}
             onClick={() => onStopClick(stop, route)}
           />
         ))}

@@ -5,6 +5,11 @@
 
   "filter.all": "Të gjitha",
 
+  "search.placeholder": "Kërko linja ose stacione…",
+  "search.no_results": "Nuk u gjet asnjë rezultat",
+  "search.routes_label": "Linjat",
+  "search.stops_label": "Stacionet",
+
   "planner.cta_title": "Planifiko Udhëtimin",
   "planner.cta_subtitle": "Gjej rrugën më të mirë midis stacioneve",
   "planner.title": "Planifikuesi i Udhëtimit",
@@ -48,6 +53,7 @@
   "route.origin": "Origjina",
   "route.terminus": "Stacioni i fundit",
   "route.from_prev": "{{min}} min nga i mëparshmi",
+  "route.no_more_today": "Nuk ka më sot",
 
   "stop.badge": "Stacion Autobusi",
   "stop.routes_pass_one": "{{count}} linjë kalon këtu",
@@ -82,7 +88,7 @@
   "countdown.min": "{{min}} min",
 
   "favorites.title": "Të preferuarat",
-  "favorites.subtitle": "Linjat e ruajtura",
+  "favorites.subtitle": "Stacionet e ruajtura",
   "favorites.add": "Shto",
   "favorites.label_prompt": "Për çfarë është kjo linjë?",
   "favorites.label_home": "Shtëpi",
@@ -92,6 +98,11 @@
   "favorites.custom_placeholder": "Jepini një emër…",
   "favorites.select_route": "Zgjidhni një linjë",
   "favorites.choose_route": "Zgjidhni një linjë…",
+  "favorites.select_boarding": "Në cilin stacion hipni?",
+  "favorites.choose_stop": "Zgjidhni një stacion…",
+  "favorites.select_alighting": "Ku zbrisni?",
+  "favorites.optional": "opsionale",
+  "favorites.none": "Asnjë",
   "favorites.save": "Ruaj të Preferuarën",
   "favorites.cancel": "Anulo",
   "favorites.empty_title": "Asnjë e preferuar",

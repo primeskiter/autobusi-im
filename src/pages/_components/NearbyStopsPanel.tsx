@@ -117,7 +117,7 @@ export default function NearbyStopsPanel({
   return (
     <div className="flex flex-col h-full">
       <Header onClose={onClose} />
-      <ScrollArea className="flex-1">
+      <ScrollArea className="flex-1 min-h-0">
         {nearbyStops.length === 0 ? (
           <div className="px-4 py-8 text-center text-muted-foreground text-sm">
             {t("nearby.no_stops")}

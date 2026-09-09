@@ -5,6 +5,11 @@
 
   "filter.all": "All",
 
+  "search.placeholder": "Search routes or stops…",
+  "search.no_results": "No matches found",
+  "search.routes_label": "Routes",
+  "search.stops_label": "Stops",
+
   "planner.cta_title": "Plan a Trip",
   "planner.cta_subtitle": "Find the best route between stops",
   "planner.title": "Trip Planner",
@@ -48,6 +53,7 @@
   "route.origin": "Origin",
   "route.terminus": "Terminus",
   "route.from_prev": "{{min}} min from prev",
+  "route.no_more_today": "No more today",
 
   "stop.badge": "Bus Stop",
   "stop.routes_pass_one": "{{count}} route passes here",
@@ -82,7 +88,7 @@
   "countdown.min": "{{min}} min",
 
   "favorites.title": "Favorites",
-  "favorites.subtitle": "Your saved routes",
+  "favorites.subtitle": "Your saved stops",
   "favorites.add": "Add",
   "favorites.label_prompt": "What is this route for?",
   "favorites.label_home": "Home",
@@ -92,6 +98,11 @@
   "favorites.custom_placeholder": "Give it a name…",
   "favorites.select_route": "Choose a route",
   "favorites.choose_route": "Select a route…",
+  "favorites.select_boarding": "Which stop do you board at?",
+  "favorites.choose_stop": "Select a stop…",
+  "favorites.select_alighting": "Where do you get off?",
+  "favorites.optional": "optional",
+  "favorites.none": "None",
   "favorites.save": "Save Favorite",
   "favorites.cancel": "Cancel",
   "favorites.empty_title": "No favorites yet",

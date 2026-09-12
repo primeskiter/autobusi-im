@@ -29,7 +29,7 @@ export default function RouteCarousel({ routes, selectedRoute, onSelectRoute }: 
             whileTap={{ scale: 0.98 }}
             onClick={() => onSelectRoute(route)}
             className={cn(
-              "relative overflow-hidden rounded-2xl border-2 text-left cursor-pointer transition-all h-20",
+              "relative overflow-hidden rounded-2xl border-2 text-left cursor-pointer transition-all h-24",
               "hover:shadow-md",
               isSelected ? "shadow-md" : "border-transparent"
             )}
@@ -39,13 +39,15 @@ export default function RouteCarousel({ routes, selectedRoute, onSelectRoute }: 
             <div className="absolute inset-0 bg-muted/40">
               <BusIllustration
                 color={route.color}
-                className="absolute h-[130%] w-auto top-1/2 -translate-y-1/2 -right-4 opacity-90"
+                className="absolute h-[160%] w-auto top-1/2 -translate-y-1/2 right-0"
               />
             </div>
 
             {/* Scrim: fades to the background color where the text sits, so it
-                stays easy to read over the picture without hiding it entirely */}
-            <div className="absolute inset-0 bg-gradient-to-r from-background from-[38%] via-background/95 via-[55%] to-transparent" />
+                stays easy to read over the picture without hiding it entirely.
+                Narrower and lighter than before - the illustration's own dark
+                glass band gives it enough contrast to survive being faded. */}
+            <div className="absolute inset-0 bg-gradient-to-r from-background from-[26%] via-background/80 via-[42%] to-transparent" />
 
             {/* Content */}
             <div className="relative z-10 flex items-center gap-2.5 h-full pl-3 pr-2">

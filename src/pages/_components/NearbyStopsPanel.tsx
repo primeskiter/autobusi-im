@@ -13,6 +13,7 @@ import {
   type NearbyStop,
 } from "@/data/tirana-bus-data.ts";
 import type { GeolocationStatus } from "@/hooks/use-geolocation.ts";
+import RouteBusCard from "./RouteBusCard.tsx";
 
 type Props = {
   latitude: number | null;
@@ -221,21 +222,31 @@ function NearbyStopCard({
         )}
       </button>
 
-      {/* Route chips */}
-      <div className="px-3 pb-2.5 flex flex-wrap gap-1.5">
-        {item.routes.map(({ route }) => (
-          <button
-            key={route.id}
-            onClick={() => onSelectRoute(route)}
-            className={cn(
-              "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-semibold cursor-pointer",
-              "hover:opacity-80 transition-opacity text-white"
-            )}
-            style={{ backgroundColor: route.color }}
-          >
-            {route.number}
-          </button>
-        ))}
+      {/* Routes serving this stop, as full bus-illustration cards */}
+      <div className="px-3 pb-3 flex flex-col gap-2">
+        {item.routes.map(({ route, stopIndex }, idx) => {
+          const countdown = getUpcomingDepartureCountdowns(route, stopIndex, 1)[0];
+          return (
+            <RouteBusCard
+              key={route.id}
+              route={route}
+              index={idx}
+              onClick={() => onSelectRoute(route)}
+              subtitle={
+                <div className="flex items-center gap-1 text-muted-foreground">
+                  <Clock className="w-2.5 h-2.5 flex-shrink-0" />
+                  <span className="text-[10px]">
+                    {countdown
+                      ? countdown.minutesAway === 0
+                        ? t("countdown.now")
+                        : t("countdown.min", { min: countdown.minutesAway })
+                      : route.frequency}
+                  </span>
+                </div>
+              }
+            />
+          );
+        })}
       </div>
     </div>
   );
